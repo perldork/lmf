@@ -1,0 +1,73 @@
+#!/bin/bash
+
+# chkconfig: 2345 99 99
+# description: Monitors log files and performs actions based \
+#              on matched log file entries.
+
+#  Base directory for LMF
+APPHOME=/usr/local/lmf
+
+#  Where the configuration file directory lives
+#  (can be a URL as well in the form URL,user,pass)
+#
+#  CONFIG_DIR=https://www.example.com/lmf-config,myuser,mypass
+#
+
+CONFIG_DIR=$APPHOME/config
+
+OK="echo -en \\033[1;32m"
+FAIL="echo -en \\033[1;31m"
+END="echo -en \\033[0;39m"
+
+failed() {
+
+    $FAIL
+    echo "[FAIL]"
+    $END
+
+}
+
+ok() {
+    $OK
+    echo "[OK]"
+    $END
+}
+
+case $1 in
+    stop)
+        echo -n "Stopping lmf: "
+        /usr/bin/pkill lmf-monitord || FAILED=1
+        /usr/bin/pkill lmf-released|| FAILED=1
+        
+        if [ x$FAILED = x1 ]
+        then
+            failed
+        else
+            ok
+        fi 
+
+    ;;
+    start)
+        echo -n "Starting lmf: "
+        cd $APPHOME
+        ./lmf-released $CONFIG_DIR || FAILED=1
+        ./lmf-monitord $CONFIG_DIR || FAILED=1
+
+        if [ x$FAILED = x1 ]
+        then
+            failed
+        else
+            ok
+        fi 
+
+    ;;
+    status)
+        ps auxww | fgrep lmf-
+    ;;
+    restart)
+        $0 stop
+        $0 start
+    ;;
+esac
+
+exit 0

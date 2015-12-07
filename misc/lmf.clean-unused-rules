@@ -1,0 +1,1 @@
+00 */4 * * * root /usr/local/lmf/lmf-clear-zero-hit-rules.sh 

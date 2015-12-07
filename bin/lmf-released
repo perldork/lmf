@@ -1,0 +1,78 @@
+#!/usr/bin/perl
+
+use strict;
+use Config::IniFiles;
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+
+use Syslog;
+use LogAction;
+use Configuration;
+
+my $DIR = $ARGV[0] || "$FindBin::Bin/../config";
+
+my $CF = Configuration->new($DIR)->cf();
+
+fork() && exit(0);
+
+my $LOGGER = Syslog->new('lmf-released', $CF->val('main', 'syslog-level'));
+
+$LOGGER->info('starting');
+
+my $QUEUE = $CF->val('main', 'action-queue');
+
+while (1) {
+
+    eval {
+        check_queue($QUEUE);
+    };
+
+    if ($@) {
+        $LOGGER->alert($@);
+        sleep(10);
+    } else {
+        sleep(1);
+    }
+    
+}
+
+sub check_queue {
+
+    my $file = shift;
+
+    die "$file not found" unless -r $file;
+
+    # In-place edit on so we can easily delete
+    # any events we release by just not printing
+
+    $^I = "";
+
+    local(@ARGV) = $file;
+
+    while (<>) {
+
+        my ($start,$duration,$description,$action) = split(',', $_);
+
+        chomp($action);
+
+        my $total = time() - $start;
+
+        if ($total >= $duration) {
+
+            my $msg = "Releasing $description ($total secs)";
+            $LOGGER->info($msg);
+
+            system($action) && $LOGGER->err("$description - action $action failed: $!");
+
+        } else {
+
+            # Didn't execute, reprint back to queue file
+            print "$_";
+
+        }
+
+    }
+
+}
+
+exit 0;

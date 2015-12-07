@@ -1,0 +1,17 @@
+#!/bin/bash
+
+SERVICE=${1?Missing service!}
+OUTPUT=${2?Missing output!}
+RETURN=${3:-1}
+
+#  1 == WARN, 2 == CRIT
+
+NSCA=/usr/local/lmf/bin/send_nsca
+HOST=67.19.11.212
+port=5667
+to_sec=30
+config=/usr/local/lmf/actions/nsca.cfg
+
+$NSCA -H $HOST -p $port -to $to_sec -d @ -c $config >/dev/null <<EOF
+localhost@LMF - ${SERVICE}@${RETURN}@${OUTPUT}
+EOF

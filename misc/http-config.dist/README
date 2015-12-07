@@ -1,0 +1,55 @@
+Using HTTP/HTTPS with LMF for centralized configuration management
+==================================================================
+
+Log monitoring framework allows you to store your configuration files
+on a centralized server; each instance of LMF then just needs to know
+the URL and username/password for the protected directory you are 
+storing your files on (password protection not required but recommended)
+
+To do this, just pass lmf the URL and authentication information for your
+configuration directory in the form <url>,<user>,<pass>
+
+You can set this in the init script by setting CONFIG_DIR to the URL and
+authentication information.
+
+Example:
+
+CONFIG_DIR=https://www.example.com/lmf-config/,myuser,mypass
+
+In the page you pointed to for your configurations, put a list of
+the configuration snippets to download, each separated by a newline.
+
+Example (for the above example, this list would be in an index page,
+index.html in this case):
+
+apache.conf
+dns.conf
+main.conf
+ssh.conf
+
+lmf-monitord and lmf-released will then get their configurations by
+retrieving each file from the passed in URL at startup.  This allows you 
+to have different configurations for each client or set of clients .. so 
+if you manage servers for multiple clients, you could have each clients' 
+configurations stored on a central server by domain name:
+
+lmf-config:
+|___________ mydomain.com
+|___________ anotherdomain.net
+|___________ differenturl.org
+
+The list can include relative directories, so you could go a step further
+by having common configuration snippets and each domain configuration
+just refers to the list of snippets it is using:
+
+lmf-config:
+|___________ mydomain.com
+|___________ anotherdomain.net
+|___________ differenturl.org
+|___________ common
+             |________ apache.conf
+             |________ main.conf
+             |________ dns.conf
+
+In this file is an index.html page showing a list of a few configuration
+snippets + an example htaccess file used to protect the directory.

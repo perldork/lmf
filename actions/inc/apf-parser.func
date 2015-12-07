@@ -1,0 +1,82 @@
+#!/bin/bash
+
+APF_ALLOW_FILE=/etc/apf/allow_hosts.rules
+DEBUG=0
+
+function ip_to_integer() {
+
+    local network=$1
+
+    local IFS=.
+    set $network
+
+    value=$(( $1 << 24 ))
+    value=$(( $value + ($2 << 16) ))
+    value=$(( $value + ($3 << 8) ))
+    value=$(( $value + $4 ))
+    echo $value
+
+}
+
+function p_debug() {
+
+    if [[ x$DEBUG == x1 ]]
+    then
+        echo $*
+    fi
+}
+
+function apf_is_whitelisted() {
+
+    local ip=${1?Missing IP address to check!}
+
+    if [[ ! -r $APF_ALLOW_FILE ]]
+    then
+        p_debug "Can't read APF host allow file ($APF_ALLOW_FILE)!"
+        return 1;
+    fi
+
+    while read line
+    do
+        [[ 
+           "$line" == *#* || 
+           "$line" == *:* || 
+           $line == "" 
+        ]] && continue
+
+        if [[ $line == */* ]]
+        then
+            network=${line/\/*/}
+            netbits=${line/*\//}
+            nethosts=$(( 2 ** (33 - $netbits - 1) ))
+            netmin=$(ip_to_integer $network)
+            netmax=$(( $netmin + $nethosts ))
+            ipval=$(ip_to_integer $ip)
+
+            if (( ($ipval >= $netmin) && ($ipval <= $netmax) ))
+            then
+                p_debug "$ip is in $network $netbits"
+                APF_FOUND_IN="$line"
+                return 0;
+            else
+                p_debug "$ip is NOT IN $network $netbits"
+            fi
+            # subnet $network $netbits $nethosts $netval
+        else
+            if [[ "$ip" == "$line" ]]
+            then
+                p_debug "$ip is whitelisted explicitly"
+                APF_FOUND_IN="$line"
+                return 0;
+            fi
+        fi
+
+    done < $APF_ALLOW_FILE
+
+    return 1;
+}
+
+if [ $(basename $0) = 'apf-parser.func' ]
+then
+    apf_is_whitelisted $1
+fi

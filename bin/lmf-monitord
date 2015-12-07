@@ -1,0 +1,293 @@
+#!/usr/bin/perl
+
+use strict;
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+use File::Tail;
+
+use Syslog;
+use LogAction;
+use LogMatch;
+use Configuration;
+
+my $DIR = $ARGV[0] || "$FindBin::Bin/../config";
+
+my $CF = Configuration->new($DIR)->cf();
+
+#  Daemonize
+fork() && exit(0);
+
+my $LOGGER = Syslog->new('lmf-monitord', $CF->val('main', 'syslog-level'));
+
+$LOGGER->show_debug($CF->val('main', 'debug'));
+
+$LOGGER->info('starting');
+
+#  Load all actions into hash, keyed by logfile
+
+my %ACTIONS = ();
+
+for my $section (grep(!/^main/, $CF->Sections())) {
+
+     my $action = make_action($CF, $section);
+     my $file = $action->file();
+
+     $ACTIONS{$file} ||= [];
+
+     my $array = $ACTIONS{$file};
+
+     push(@$array, $action);
+
+}
+
+# Now start the log watchers, each gets passed
+# a reference to the actions associated with their log
+
+my @CHILDREN;
+
+for my $log (keys %ACTIONS) {
+
+    my $actions = $ACTIONS{$log};
+
+    $LOGGER->info("Starting log watcher for $log");
+
+    my $pid = fork();
+    push(@CHILDREN, $pid) if defined $pid;
+
+    if (! $pid) {
+        watch_log($CF, $LOGGER, $log, $actions);
+        exit;
+    }
+
+}
+
+#  Monitor children
+
+$LOGGER->info("Waiting for children");
+
+while (1) {
+
+    for my $child (@CHILDREN) {
+        my $ret = kill(0, $child);
+        #$LOGGER->debug("Child $child, status $ret");
+        sleep(600);
+    }
+
+}
+
+exit 0;
+
+########
+# SUBS #
+########
+
+sub make_action {
+    
+    my $cf = shift;
+    my $section = shift;
+
+    my $action = LogAction->new();
+    $action->name($section);
+
+    my @params = qw(file pattern threshold duration within trigger 
+                    release message);
+
+    for my $param (@params) {
+        $action->$param($cf->val($section, $param));
+    }
+
+    $action->validate();
+
+    return $action;
+
+}
+
+sub watch_log {
+ 
+    my $cf = shift;
+    my $syslog = shift;
+    my $logfile = shift;
+    my $actions = shift;
+
+    $0 = "$0: watch file $logfile";
+
+    my %matches;
+
+    my $file = File::Tail->new(name => $logfile, 
+                               maxinterval => $cf->val('main', 'interval'), 
+                               reset_tail => 0,
+                               tail => 0,
+                               interval    => $cf->val('main', 'interval')) 
+                   || $syslog->abort("Can't read from $logfile: $!");
+    
+    $syslog->info("$logfile watcher: " . scalar(@$actions) . " actions");
+
+    while (defined(my $line = $file->read)) {
+
+        $syslog->debug("Begin action check: " . scalar(@$actions) . " actions");
+
+        for my $action (@$actions) {
+
+            my $pattern = $action->pattern();
+            my $name = $action->name();
+
+            my $match = undef;
+
+            #  If we have a pattern match, check to see if this
+            #  is a new match or a continuation of an existing match.
+
+            if ($line =~ /$pattern/) {
+
+                $syslog->debug("Matched $name");
+
+                my @vars = ($line =~ m/$pattern/);
+
+                $match = LogMatch->new($action, time(), \@vars);
+
+                my $found = 0;
+
+                for my $current (keys %matches) {
+
+                    my $queued_match = $matches{$current};
+
+                    if ($queued_match->is_equal($match)) {
+                        $match = undef;
+                        $match = $queued_match;
+                        $found = 1;
+                        last;
+                    }
+                }
+
+                $matches{$match} = $match if $found == 0;
+
+                $match->increment();
+                $syslog->debug("Count is now " . $match->count());
+
+            }
+
+            #  Check all matches to see if we need to discard or execute any
+
+            $syslog->debug("Begin exec/expire check: " . 
+                           scalar(keys %matches) . " active matches");
+
+            for my $key (keys %matches) {
+
+                my $m = $matches{$key};
+
+                if ($m->is_ready() && (! $m->in_progress())) {
+
+                    my $message = substitute($m->action()->message(),
+                                             $m->vars());
+
+                    $syslog->warning($message);
+
+                    execute_trigger($syslog, 
+                                    $cf->val('main', 'action-queue'),
+                                    $m);
+
+                    $m->in_progress(1);
+
+                    $syslog->debug("Executed $message - now in progress");
+
+                } elsif ($m->in_progress() && ($m->action->duration() <= 0)) {
+
+                    # If it has no duration, delete it so that we
+                    # make sure we don't retrigger ... action with no
+                    # duration is a one off action with no release counterpart.
+
+                    delete $matches{$key};
+
+                    my $message = substitute($m->action()->message(),
+                                             $m->vars());
+
+                    my $time = $m->start();
+
+                    $syslog->debug("Deleted $message [$time] - no duration");
+
+                } else {
+
+                    $syslog->debug("N/D/S/W/I: " .
+                                   join('/', $m->action->name(),
+                                             $m->action->duration(),
+                                             $m->start(),
+                                             $m->action->within(),
+                                             (time() - $m->start())));
+
+                    if ($m->is_expired()) {
+                        my $name = $m->action()->name();
+                        delete $matches{$m};
+                        $syslog->debug("Deleted $name - expired");
+                    }
+
+                }
+
+            }
+
+        }
+
+    }
+
+}
+
+sub execute_trigger {
+
+    my $syslog = shift;
+    my $queue = shift;
+    my $match = shift;
+
+    my $action = $match->action();
+
+    my @vars = @{$match->vars()};
+    
+    $syslog->debug($action->name() . " - variable substitution");
+
+    my $trigger = substitute($action->trigger(), \@vars);
+
+    $syslog->debug("Execute - $trigger");
+
+    system("$trigger &");
+
+    #  Set up release action if one exists
+
+    return unless $action->release();
+
+    my $release = substitute($action->release(), \@vars);
+    my $message = substitute($action->message(), \@vars);
+
+    local(*QUEUE);
+    open(QUEUE, ">> $queue") || $syslog->abort("Can't append to $queue: $!");
+
+    my $start_of_match = scalar localtime($match->start());
+    $message .= " [$start_of_match]";
+
+    print QUEUE join(',', time(), $action->duration(), $message, 
+                          $release), "\n";
+    close(QUEUE);
+
+    return;
+
+}
+
+sub substitute {
+
+    my $string = shift;
+    my $var_ref = shift;
+
+    my @vars = @$var_ref;
+
+    for (my $i = 0; $i <= $#vars; $i++) {
+
+        my $replace = $vars[$i];
+        my $find = sprintf('%%%d', $i + 1);
+
+        $LOGGER->debug("$string: find $find, replace $replace");
+
+        $string =~ s/$find/$replace/g;
+
+    }
+
+    $LOGGER->debug("subs: $string");
+
+    return $string;
+
+}

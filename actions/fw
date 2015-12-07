@@ -1,0 +1,136 @@
+#!/bin/bash
+
+#  QUIET: Don't show non-fatal errors if set to 1, good for
+#  use in scripts
+#
+#  Non-fatal errors:
+#  * Trying to block an address that is local
+#  * Trying to unblock an address that hasn't been blocked
+#  * Trying to block an address that is already blocked
+
+QUIET=1
+
+#  Chains to manipulate
+CHAINS="INPUT OUTPUT FORWARD"
+
+APF_FUNC=/usr/local/lmf/actions/inc/apf-parser.func
+
+. $APF_FUNC || exit 1
+
+########################
+# End of configuration #
+########################
+
+export PATH=/bin:/usr/bin:/sbin:/usr/sbin
+
+HELP="USAGE: $0 drop|allow address"
+
+STATE=${1?Missing state!
+$HELP}
+
+ADDRESS=${2?Missing ADDRESS (drop|allow)!
+$HELP}
+
+#  Strip off ipv6 prefix
+ADDRESS=${ADDRESS/::ffff:/}
+
+#  Get the number of the rule for the chain and address
+#  passed to the function .. returns '' if not found
+
+get_rule() {
+    local chain=$1
+    local src=$2
+    /sbin/iptables --line-numbers --list $chain --numeric | \
+    awk '$2 == "DROP" && $3 == "all" && $5 == "'$src'" {printf "%d", $1; exit}'
+}
+
+#  Print error unless QUIET specified; only use for 
+#  non-fatal errors!
+
+perr() {
+
+    if [ "$QUIET" != "1" ]
+    then
+        echo "$*" >&2
+    fi
+
+}
+
+##################################################
+#  Make sure we did not specify a local address! #
+##################################################
+
+MYIPS="69.56.226.148 66.98.176.39 $(/sbin/ip addr | fgrep inet | \
+        awk '{printf("%s ", $2);}' | sed -e 's#/[0-9]*# #g')"
+
+for ip in $MYIPS
+do
+
+    if [ "$ADDRESS" = "$ip" -a "$STATE" = "drop" ]
+    then
+        perr "$ADDRESS is local, won't block ourselves!"
+        exit 1
+    fi
+
+done
+
+#  Now drop or allow
+
+case $STATE in
+    drop)
+
+        if apf_is_whitelisted $ADDRESS
+        then
+            perr "$ADDRESS is whitelisted in APF ($APF_FOUND_IN)"
+            exit 0
+        else
+            perr "$ADDRESS is NOT whitelisted in APF"
+        fi
+
+        for chain in $CHAINS
+        do
+
+            RULE=$(get_rule $chain $ADDRESS)
+
+            if [ "x$RULE" = x ]
+            then
+                /sbin/iptables -I $chain -s $ADDRESS -j DROP
+            else
+                perr "$ADDRESS: DROP rule exists in $chain" 
+            fi
+
+        done
+
+    ;;
+    allow)
+
+        for chain in $CHAINS
+        do
+
+            RULE=$(get_rule $chain $ADDRESS)
+
+            if [ "x$RULE" = "x" ]
+            then
+                perr "$ADDRESS: no drop rules in $chain" 
+                continue
+            fi
+
+            #  Gets rid of multiple drop rules if they exist
+            while [ "x$RULE" != "x" ]
+            do
+
+                /sbin/iptables -D $chain $RULE
+
+                RULE=$(get_rule $chain $ADDRESS)
+
+            done
+
+        done
+    ;;
+    *)
+        echo "Invalid state $STATE (! drop || allow)" >&2
+        exit 1
+    ;;
+esac
+
+exit 0

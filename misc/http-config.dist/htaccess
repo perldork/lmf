@@ -1,0 +1,6 @@
+AuthGroupFile /var/www/.htgroup
+AuthUserFile /var/www/.htpasswd
+AuthName 'Log File Monitor Rules'
+AuthType Basic
+
+require group lmf
