@@ -1,15 +1,6 @@
 # LMF - A log monitoring framework
 
-* Overview
-* Global options
-* Configuring a log file matcher
-* Installing LMF
-
-## Overview
-
-LMF is a flexible log monitoring framework that watches log files on
-your system, matching patterns that you specify and taking actions
-based on match thresholds you configure on a per-pattern basis.
+HAHAHAHAA HOOOOO HOOOO
 
 LMF lets you monitor many log files with multiple patterns each at
 once.  Configurations for these log file matchers are kept in 
