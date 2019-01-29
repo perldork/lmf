@@ -1,6 +1,6 @@
 # LMF - A log monitoring framework
 
-HAHAHAHHAHAHAHAHAHAHAHAHAHAHA
+1111111111111111111111111111
 
 LMF lets you monitor many log files with multiple patterns each at
 once.  Configurations for these log file matchers are kept in 
